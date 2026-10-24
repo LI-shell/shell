@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Card terminal shell</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body { display: flex; flex-direction: column; font: 14px/1.3 system-ui, sans-serif; }
+    #bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: #eee; border-bottom: 1px solid #bbb; }
+    #bar button { font: inherit; padding: 3px 10px; }
+    #status { flex: 1; }
+    #page { flex: 1; width: 100%; border: 0; }
+  </style>
+</head>
+<body>
+  <!-- Card shell: a normal top-level page (open it from disk or host it outside Google).
+       It shows the Apps Script test page in the frame below. In "Shell relay" mode the test page
+       asks this page to make the terminal request, because a top-level page may reach the local
+       network when Google's frames may not. In "Direct" mode the frame passes the local network
+       permission down (allow=...) so the test can see whether Google's inner frames pass it on. -->
+  <div id="bar">
+    <span id="status">Card shell: relays requests to the card terminal for the test page below.</span>
+    <button id="btnUrl">Test page address</button>
+  </div>
+  <iframe id="page" allow="local-network-access; local-network; loopback-network"></iframe>
+
+<script>
+const $ = id => document.getElementById(id);
+const URL_KEY = 'cardShellUrl';
+// Only Apps Script pages may ask (e.g. https://n-abc123-0lu-script.googleusercontent.com)
+const GAS_ORIGIN = /^https:\/\/[a-z0-9-]+-script\.googleusercontent\.com$/;
+// Only terminal requests: a private IPv4 address, a port, and a base64 frame
+const TERMINAL_URL = /^https?:\/\/(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):\d{1,5}\/\?[A-Za-z0-9+\/=]*$/;
+
+// ---------------- Test page address (remembered on this device) ----------------
+function loadPage() {
+  let url = new URLSearchParams(location.search).get('page');
+  try { url = url || localStorage.getItem(URL_KEY); } catch (e) { /* storage blocked */ }
+  if (!url) return askUrl();
+  $('page').src = url;
+}
+function askUrl() {
+  let current = '';
+  try { current = localStorage.getItem(URL_KEY) || ''; } catch (e) { /* storage blocked */ }
+  const url = (prompt('Paste the test page web app address (https://script.google.com/macros/s/.../exec):', current) || '').trim();
+  if (!/^https:\/\/script\.google\.com\//.test(url)) { if (url) alert('That is not a script.google.com address.'); return; }
+  try { localStorage.setItem(URL_KEY, url); } catch (e) { /* not remembered */ }
+  $('page').src = url;
+}
+$('btnUrl').onclick = askUrl;
+
+function info() {
+  const v = (navigator.userAgent.match(/Chrom(?:e|ium)\/([\d.]+)/) || [])[1] || 'not Chrome';
+  return `shell ${location.protocol === 'file:' ? 'local file' : location.origin}, secure ${window.isSecureContext}, Chrome ${v}`;
+}
+
+// ---------------- Requests from the test page ----------------
+// Page sends: { type: 'pax-term', id, cmd: 'ping' }  or  { type: 'pax-term', id, cmd: 'fetch', url, tmo, mode, tas }
+// Shell answers: { type: 'pax-term-reply', id, ok, status, bytes, ms, timeout, err }
+window.addEventListener('message', async ev => {
+  const m = ev.data;
+  if (!m || m.type !== 'pax-term' || !GAS_ORIGIN.test(ev.origin)) return;
+  const reply = extra => ev.source.postMessage(Object.assign({ type: 'pax-term-reply', id: m.id }, extra), ev.origin);
+  if (m.cmd === 'ping') { reply({ ok: true, info: info() }); return; }
+  if (m.cmd !== 'fetch') return;
+  if (!TERMINAL_URL.test(String(m.url))) { reply({ ok: false, ms: 0, err: 'shell refused: not a terminal address' }); return; }
+  const t0 = performance.now(), ac = new AbortController(), to = setTimeout(() => ac.abort(), Number(m.tmo) || 120000);
+  try {
+    const o = { signal: ac.signal, cache: 'no-store', mode: m.mode === 'no-cors' ? 'no-cors' : 'cors' };
+    if (m.tas) o.targetAddressSpace = 'local';
+    const r = await fetch(m.url, o);
+    const bytes = Array.from(new Uint8Array(await r.arrayBuffer()));
+    $('status').textContent = `Card shell: last request HTTP ${r.status}, ${Math.round(performance.now() - t0)} ms`;
+    reply({ ok: true, status: r.status, bytes, ms: Math.round(performance.now() - t0) });
+  } catch (e) {
+    $('status').textContent = 'Card shell: last request failed: ' + e.message;
+    reply({ ok: false, timeout: e.name === 'AbortError', err: e.message, ms: Math.round(performance.now() - t0) });
+  } finally { clearTimeout(to); }
+});
+
+loadPage();
+</script>
+</body>
+</html>
