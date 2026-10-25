@@ -3,66 +3,199 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Card terminal shell</title>
+  <title>Good Vibes POS</title>
   <style>
     html, body { height: 100%; margin: 0; }
     body { display: flex; flex-direction: column; font: 14px/1.3 system-ui, sans-serif; }
-    #bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: #eee; border-bottom: 1px solid #bbb; }
-    #bar button { font: inherit; padding: 3px 10px; }
-    #status { flex: 1; }
-    #page { flex: 1; width: 100%; border: 0; }
+    #strip { display: none; padding: 6px 10px; background: #b91c1c; color: #fff; font-weight: 600; cursor: pointer; }
+    #strip.show { display: block; }
+    #strip button { margin-left: 10px; font: inherit; font-weight: 600; padding: 2px 10px; cursor: pointer; }
+    #pos { flex: 1; width: 100%; border: 0; }
+    #corner { position: fixed; left: 6px; bottom: 6px; z-index: 10; width: 26px; height: 26px; border-radius: 50%;
+              border: 1px solid #94a3b8; background: #f8fafc; color: #475569; font-size: 15px; line-height: 22px;
+              padding: 0; opacity: .45; cursor: pointer; }
+    #corner:hover { opacity: 1; }
+    #menu { display: none; position: fixed; left: 6px; bottom: 38px; z-index: 11; background: #fff; border: 1px solid #94a3b8;
+            border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.25); padding: 8px; min-width: 220px; }
+    #menu.show { display: block; }
+    #menu div { padding: 4px 2px 8px; color: #334155; }
+    #menu button { display: block; width: 100%; margin-top: 4px; font: inherit; padding: 6px 10px; text-align: left; cursor: pointer; }
   </style>
 </head>
 <body>
-  <!-- Card shell: a normal top-level page (open it from disk or host it outside Google).
-       It shows the Apps Script test page in the frame below. In "Shell relay" mode the test page
-       asks this page to make the terminal request, because a top-level page may reach the local
-       network when Google's frames may not. In "Direct" mode the frame passes the local network
-       permission down (allow=...) so the test can see whether Google's inner frames pass it on. -->
-  <div id="bar">
-    <span id="status">Card shell: relays requests to the card terminal for the test page below.</span>
-    <button id="btnUrl">Test page address</button>
+  <!-- Good Vibes POS shell (STAGE_2_PLAN.md S2-2). A normal top-level page at
+       https://pos.goodvibesglassart.com/ (System/SHELL_HOSTING.md). It shows the
+       Apps Script POS in the frame below and does what Google's frame cannot:
+       it holds the Star printer over USB and relays card terminal requests on
+       the store network. It is a pipe: the POS builds every print job and every
+       terminal request. It holds no store data and no POS address (each device
+       enters the address once; this repository is public).
+       Master copy: POS/shell/index.html in the main repository. -->
+  <div id="strip"></div>
+  <iframe id="pos" allow="local-network-access; local-network; loopback-network"></iframe>
+  <button id="corner" title="Printer and POS address">&#9881;</button>
+  <div id="menu">
+    <div id="menuPrinter">Printer: checking...</div>
+    <button id="btnConnect">Connect printer</button>
+    <button id="btnUrl">POS address</button>
+    <button id="btnDirect" style="display:none">Open POS without printer</button>
   </div>
-  <iframe id="page" allow="local-network-access; local-network; loopback-network"></iframe>
 
 <script>
+// ---------------- Settings ----------------
+const ALLOW_DEV_ADDRESS = false;           // true also accepts a /dev address (testing only; needs an editor's sign-in)
+const SHOW_OPEN_WITHOUT_PRINTER = false;   // "Open POS without printer" (Sh1): true only once test P1 passes (the direct copy works)
+const HELLO_WAIT_MS = 20000;               // no greeting from the POS in this time = "The POS could not open here"
+const SUPPORT_NAME = 'Manager';            // who the clerk tells (the shell cannot read POS_Keys)
+
 const $ = id => document.getElementById(id);
-const URL_KEY = 'cardShellUrl';
-// Only Apps Script pages may ask (e.g. https://n-abc123-0lu-script.googleusercontent.com)
+const STAR = 0x0519;                       // Star Micronics USB vendor id
+const POS_URL_KEY = 'gvPosAddress';        // the POS /exec address on this device
+const PRINTER_USED_KEY = 'gvPrinterUsed';  // set once a printer has connected here: only then is "not connected" shown
+// Only Apps Script pages may talk to the shell (e.g. https://n-abc123-0lu-script.googleusercontent.com)
 const GAS_ORIGIN = /^https:\/\/[a-z0-9-]+-script\.googleusercontent\.com$/;
 // Only terminal requests: a private IPv4 address, a port, and a base64 frame
 const TERMINAL_URL = /^https?:\/\/(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):\d{1,5}\/\?[A-Za-z0-9+\/=]*$/;
 
-// ---------------- Test page address (remembered on this device) ----------------
-function loadPage() {
-  let url = new URLSearchParams(location.search).get('page');
-  try { url = url || localStorage.getItem(URL_KEY); } catch (e) { /* storage blocked */ }
-  if (!url) return askUrl();
-  $('page').src = url;
-}
-function askUrl() {
-  let current = '';
-  try { current = localStorage.getItem(URL_KEY) || ''; } catch (e) { /* storage blocked */ }
-  const url = (prompt('Paste the test page web app address (https://script.google.com/macros/s/.../exec):', current) || '').trim();
-  if (!/^https:\/\/script\.google\.com\//.test(url)) { if (url) alert('That is not a script.google.com address.'); return; }
-  try { localStorage.setItem(URL_KEY, url); } catch (e) { /* not remembered */ }
-  $('page').src = url;
-}
-$('btnUrl').onclick = askUrl;
-
-function info() {
-  const v = (navigator.userAgent.match(/Chrom(?:e|ium)\/([\d.]+)/) || [])[1] || 'not Chrome';
-  return `shell ${location.protocol === 'file:' ? 'local file' : location.origin}, secure ${window.isSecureContext}, Chrome ${v}`;
+function store(key, value) {
+  try { if (value === undefined) return localStorage.getItem(key); localStorage.setItem(key, value); } catch (e) { /* storage blocked */ }
+  return null;
 }
 
-// ---------------- Requests from the test page ----------------
-// Page sends: { type: 'pax-term', id, cmd: 'ping' }  or  { type: 'pax-term', id, cmd: 'fetch', url, tmo, mode, tas }
-// Shell answers: { type: 'pax-term-reply', id, ok, status, bytes, ms, timeout, err }
-window.addEventListener('message', async ev => {
+// ---------------- The strip: only when something needs attention ----------------
+let printerProblem = '';   // '' | 'not connected' | 'in use'
+let posProblem = false;    // the POS did not greet the shell in time
+function renderStrip() {
+  const s = $('strip');
+  let html = '', onTap = null;
+  if (posProblem) {
+    // Sh1 (STAGE_2_PLAN.md): the direct copy only once test P1 passed; otherwise the backup phone.
+    html = SHOW_OPEN_WITHOUT_PRINTER
+      ? `The POS could not open here. Use the POS without the printer and manual credit card processing, and tell the ${SUPPORT_NAME} (POS Shell issue - in Help topics). <button id="stripDirect">Open POS without printer</button>`
+      : `The POS could not open here. Use the backup phone, and tell the ${SUPPORT_NAME} (POS Shell issue - in Help topics).`;
+  } else if (printerProblem === 'in use' && store(PRINTER_USED_KEY) === '1') {
+    html = 'Printer in use by another window - close the other POS window, then tap here.';
+    onTap = () => autoConnect();
+  } else if (printerProblem === 'not connected' && store(PRINTER_USED_KEY) === '1') {
+    html = 'Printer not connected - tap to connect.';
+    onTap = () => connectPrinter();
+  }
+  s.innerHTML = html;
+  s.className = html ? 'show' : '';
+  s.onclick = e => { if (e.target.id === 'stripDirect') openDirect(); else if (onTap) onTap(); };
+}
+
+// ---------------- POS address (remembered on this device) ----------------
+function validPosUrl(url) {
+  return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url) ||
+    (ALLOW_DEV_ADDRESS && /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/dev$/.test(url));
+}
+let helloTimer = null;
+function loadPos() {
+  const url = store(POS_URL_KEY);
+  if (!url || !validPosUrl(url)) return askPosUrl();
+  posProblem = false;
+  renderStrip();
+  clearTimeout(helloTimer);
+  helloTimer = setTimeout(() => { posProblem = true; renderStrip(); }, HELLO_WAIT_MS);
+  $('pos').src = url;
+}
+function askPosUrl() {
+  const url = (prompt('Paste the POS web app address (https://script.google.com/macros/s/.../exec):', store(POS_URL_KEY) || '') || '').trim();
+  if (!validPosUrl(url)) { if (url) alert('That is not a POS address. It must look like https://script.google.com/macros/s/.../exec'); return; }
+  store(POS_URL_KEY, url);
+  loadPos();
+}
+function openDirect() {
+  const url = store(POS_URL_KEY);
+  if (url) window.open(url, '_blank');
+}
+
+// ---------------- Printer (WebUSB) ----------------
+let device = null, epOut = null;
+function setPrinter(text, problem) {
+  printerProblem = problem || '';
+  $('menuPrinter').textContent = 'Printer: ' + text;
+  console.log('[shell] printer: ' + text);
+  renderStrip();
+}
+async function openPrinter(d) {
+  if (!d.opened) await d.open();
+  if (!d.configuration) await d.selectConfiguration(1);
+  const iface = d.configuration.interfaces.find(i => i.alternates[0].interfaceClass === 7);
+  if (!iface.claimed) await d.claimInterface(iface.interfaceNumber);
+  epOut = iface.alternates[0].endpoints.find(e => e.direction === 'out').endpointNumber;
+  device = d;
+  store(PRINTER_USED_KEY, '1');
+  setPrinter('connected (' + d.productName + ')');
+}
+async function autoConnect() {
+  if (!navigator.usb) { setPrinter('not available in this browser'); return; }
+  const approved = (await navigator.usb.getDevices()).filter(d => d.vendorId === STAR);
+  if (!approved.length) { setPrinter('not connected', 'not connected'); return; }
+  try { await openPrinter(approved[0]); }
+  catch (e) { setPrinter('in use by another window (' + e.message + ')', 'in use'); }
+}
+async function connectPrinter() {
+  if (!navigator.usb) { alert('This browser cannot use a USB printer.'); return; }
+  try { await openPrinter(await navigator.usb.requestDevice({ filters: [{ vendorId: STAR }] })); }
+  catch (e) { if (e.name !== 'NotFoundError') setPrinter('could not connect (' + e.message + ')', /claim/i.test(e.message) ? 'in use' : 'not connected'); }
+}
+if (navigator.usb) {
+  navigator.usb.addEventListener('disconnect', e => {
+    if (e.device !== device) return;
+    device = null; epOut = null;
+    setPrinter('not connected', 'not connected');
+  });
+  navigator.usb.addEventListener('connect', e => {
+    if (device || e.device.vendorId !== STAR) return;
+    openPrinter(e.device).catch(err => setPrinter('in use by another window (' + err.message + ')', 'in use'));
+  });
+}
+async function sendBytes(bytes) {
+  if (!device) throw new Error(printerProblem === 'in use' ? 'Printer in use by another window' : 'Printer not connected');
+  for (let i = 0; i < bytes.length; i += 4096) {
+    const r = await device.transferOut(epOut, bytes.slice(i, i + 4096));
+    if (r.status !== 'ok') throw new Error('USB status ' + r.status);
+  }
+}
+
+// ---------------- Messages from the POS ----------------
+// Printer:  { type:'star-printer', id, cmd:'status' | 'send', bytes? }
+//        -> { type:'star-printer-reply', id, ok, connected, inUse, printer?, error? }
+// Terminal: { type:'pax-term', id, cmd:'ping' | 'fetch', url, tmo, mode, tas }
+//        -> { type:'pax-term-reply', id, ok, status, bytes, ms, timeout, err, info }
+// POS:      { type:'gv-pos', cmd:'hello' }  the POS loaded (clears "The POS could not open here")
+//           { type:'gv-pos', cmd:'reload' } reload the POS frame (System Update)
+let printQueue = Promise.resolve();   // one print job at a time, in order
+window.addEventListener('message', ev => {
   const m = ev.data;
-  if (!m || m.type !== 'pax-term' || !GAS_ORIGIN.test(ev.origin)) return;
+  if (!m || typeof m !== 'object' || !GAS_ORIGIN.test(ev.origin)) return;
+  if (m.type === 'gv-pos') {
+    if (m.cmd === 'hello') { clearTimeout(helloTimer); posProblem = false; renderStrip(); }
+    if (m.cmd === 'reload') loadPos();
+    return;
+  }
+  if (m.type === 'star-printer') {
+    const reply = extra => ev.source.postMessage(Object.assign({ type: 'star-printer-reply', id: m.id, connected: !!device, inUse: printerProblem === 'in use' }, extra), ev.origin);
+    if (m.cmd === 'status') { reply({ ok: true, printer: device ? device.productName : null }); return; }
+    if (m.cmd === 'send') {
+      printQueue = printQueue
+        .then(() => sendBytes(new Uint8Array(m.bytes)))
+        .then(() => reply({ ok: true }), err => reply({ ok: false, error: err.message }));
+    }
+    return;
+  }
+  if (m.type === 'pax-term') relayTerminal(m, ev);
+});
+
+function shellInfo() {
+  const v = (navigator.userAgent.match(/Chrom(?:e|ium)\/([\d.]+)/) || [])[1] || 'not Chrome';
+  return `shell ${location.origin}, secure ${window.isSecureContext}, Chrome ${v}`;
+}
+async function relayTerminal(m, ev) {
   const reply = extra => ev.source.postMessage(Object.assign({ type: 'pax-term-reply', id: m.id }, extra), ev.origin);
-  if (m.cmd === 'ping') { reply({ ok: true, info: info() }); return; }
+  if (m.cmd === 'ping') { reply({ ok: true, info: shellInfo() }); return; }
   if (m.cmd !== 'fetch') return;
   if (!TERMINAL_URL.test(String(m.url))) { reply({ ok: false, ms: 0, err: 'shell refused: not a terminal address' }); return; }
   const t0 = performance.now(), ac = new AbortController(), to = setTimeout(() => ac.abort(), Number(m.tmo) || 120000);
@@ -71,15 +204,21 @@ window.addEventListener('message', async ev => {
     if (m.tas) o.targetAddressSpace = 'local';
     const r = await fetch(m.url, o);
     const bytes = Array.from(new Uint8Array(await r.arrayBuffer()));
-    $('status').textContent = `Card shell: last request HTTP ${r.status}, ${Math.round(performance.now() - t0)} ms`;
     reply({ ok: true, status: r.status, bytes, ms: Math.round(performance.now() - t0) });
   } catch (e) {
-    $('status').textContent = 'Card shell: last request failed: ' + e.message;
     reply({ ok: false, timeout: e.name === 'AbortError', err: e.message, ms: Math.round(performance.now() - t0) });
   } finally { clearTimeout(to); }
-});
+}
 
-loadPage();
+// ---------------- Corner menu ----------------
+$('corner').onclick = () => $('menu').classList.toggle('show');
+$('btnConnect').onclick = () => { $('menu').classList.remove('show'); connectPrinter(); };
+$('btnUrl').onclick = () => { $('menu').classList.remove('show'); askPosUrl(); };
+$('btnDirect').onclick = () => { $('menu').classList.remove('show'); openDirect(); };
+if (SHOW_OPEN_WITHOUT_PRINTER) $('btnDirect').style.display = '';
+
+loadPos();
+autoConnect().catch(e => setPrinter('error: ' + e.message, 'not connected'));
 </script>
 </body>
 </html>
