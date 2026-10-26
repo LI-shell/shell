@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>POS</title>
+  <title>Good Vibes POS</title>
   <style>
     html, body { height: 100%; margin: 0; }
     body { display: flex; flex-direction: column; font: 14px/1.3 system-ui, sans-serif; }
-    #strip { display: none; padding: 6px 10px; background: #b91c1c; color: #fff; font-weight: 600; cursor: pointer; }
+    /* The app's gentle red, normal weight, for every strip message (owner 26 Oct, S2-9 #55) */
+    #strip { display: none; padding: 6px 10px; background: #FEE2E2; color: #991B1B; border-bottom: 1px solid #F87171; font-weight: 400; cursor: pointer; }
     #strip.show { display: block; }
-    #strip button { margin-left: 10px; font: inherit; font-weight: 600; padding: 2px 10px; cursor: pointer; }
+    #strip button { margin-left: 10px; font: inherit; padding: 2px 10px; cursor: pointer; }
     #pos { flex: 1; width: 100%; border: 0; }
     #corner { position: fixed; left: 6px; bottom: 6px; z-index: 10; width: 26px; height: 26px; border-radius: 50%;
               border: 1px solid #94a3b8; background: #f8fafc; color: #475569; font-size: 15px; line-height: 22px;
@@ -23,6 +24,14 @@
   </style>
 </head>
 <body>
+  <!-- Good Vibes POS shell (STAGE_2_PLAN.md S2-2). A normal top-level page at
+       https://pos.goodvibesglassart.com/ (System/SHELL_HOSTING.md). It shows the
+       Apps Script POS in the frame below and does what Google's frame cannot:
+       it holds the Star printer over USB and relays card terminal requests on
+       the store network. It is a pipe: the POS builds every print job and every
+       terminal request. It holds no store data and no POS address (each device
+       enters the address once; this repository is public).
+       Master copy: POS/shell/index.html in the main repository. -->
   <div id="strip"></div>
   <iframe id="pos" allow="local-network-access; local-network; loopback-network"></iframe>
   <button id="corner" title="Printer and POS address">&#9881;</button>
@@ -110,6 +119,13 @@ function setPrinter(text, problem) {
   $('menuPrinter').textContent = 'Printer: ' + text;
   console.log('[shell] printer: ' + text);
   renderStrip();
+  postPrinterStatus();
+}
+// The POS window that greeted the shell: told at once when the printer connects or disconnects
+// (S2-9 #56 the printer icon, #58 "The receipt did not print" prints by itself when the printer is back).
+let posWindow = null, posOrigin = '';
+function postPrinterStatus() {
+  if (posWindow) posWindow.postMessage({ type: 'star-printer-status', connected: !!device, inUse: printerProblem === 'in use' }, posOrigin);
 }
 async function openPrinter(d) {
   if (!d.opened) await d.open();
@@ -152,13 +168,24 @@ async function sendBytes(bytes) {
   }
 }
 
+// ---------------- Messages from the POS ----------------
+// Printer:  { type:'star-printer', id, cmd:'status' | 'send', bytes? }
+//        -> { type:'star-printer-reply', id, ok, connected, inUse, printer?, error? }
+// Terminal: { type:'pax-term', id, cmd:'ping' | 'fetch', url, tmo, mode, tas }
+//        -> { type:'pax-term-reply', id, ok, status, bytes, ms, timeout, err, info }
+// POS:      { type:'gv-pos', cmd:'hello' }  the POS loaded (clears "The POS could not open here")
+//        <- { type:'star-printer-status', connected, inUse }  sent after the hello and whenever the printer changes
+//           { type:'gv-pos', cmd:'reload' } reload the POS frame (System Update)
+//           { type:'gv-pos', cmd:'net', id, url } is there internet? (S2-7: after a failed call, at most once a minute)
+//        -> { type:'gv-pos-reply', id, ok }
 let printQueue = Promise.resolve();   // one print job at a time, in order
 window.addEventListener('message', ev => {
   const m = ev.data;
   if (!m || typeof m !== 'object' || !GAS_ORIGIN.test(ev.origin)) return;
   if (m.type === 'gv-pos') {
-    if (m.cmd === 'hello') { clearTimeout(helloTimer); posProblem = false; renderStrip(); }
+    if (m.cmd === 'hello') { clearTimeout(helloTimer); posProblem = false; posWindow = ev.source; posOrigin = ev.origin; renderStrip(); postPrinterStatus(); }
     if (m.cmd === 'reload') loadPos();
+    if (m.cmd === 'net') netCheck(m, ev);
     return;
   }
   if (m.type === 'star-printer') {
@@ -173,6 +200,17 @@ window.addEventListener('message', ev => {
   }
   if (m.type === 'pax-term') relayTerminal(m, ev);
 });
+
+// The internet check (S2-7 Q7j): only Google's generate_204 address, answered as ok / not ok.
+const NET_CHECK_URL = 'https://www.gstatic.com/generate_204';
+async function netCheck(m, ev) {
+  const reply = ok => ev.source.postMessage({ type: 'gv-pos-reply', id: m.id, ok: ok }, ev.origin);
+  if (m.url !== NET_CHECK_URL) { reply(false); return; }
+  const ac = new AbortController(), to = setTimeout(() => ac.abort(), 5000);
+  try { await fetch(NET_CHECK_URL, { mode: 'no-cors', cache: 'no-store', signal: ac.signal }); reply(true); }
+  catch (e) { reply(false); }
+  finally { clearTimeout(to); }
+}
 
 function shellInfo() {
   const v = (navigator.userAgent.match(/Chrom(?:e|ium)\/([\d.]+)/) || [])[1] || 'not Chrome';
