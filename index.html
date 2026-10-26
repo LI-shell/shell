@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Good Vibes POS</title>
+  <title>POS</title>
   <style>
     html, body { height: 100%; margin: 0; }
     body { display: flex; flex-direction: column; font: 14px/1.3 system-ui, sans-serif; }
@@ -23,14 +23,6 @@
   </style>
 </head>
 <body>
-  <!-- Good Vibes POS shell (STAGE_2_PLAN.md S2-2). A normal top-level page at
-       https://pos.goodvibesglassart.com/ (System/SHELL_HOSTING.md). It shows the
-       Apps Script POS in the frame below and does what Google's frame cannot:
-       it holds the Star printer over USB and relays card terminal requests on
-       the store network. It is a pipe: the POS builds every print job and every
-       terminal request. It holds no store data and no POS address (each device
-       enters the address once; this repository is public).
-       Master copy: POS/shell/index.html in the main repository. -->
   <div id="strip"></div>
   <iframe id="pos" allow="local-network-access; local-network; loopback-network"></iframe>
   <button id="corner" title="Printer and POS address">&#9881;</button>
@@ -160,13 +152,6 @@ async function sendBytes(bytes) {
   }
 }
 
-// ---------------- Messages from the POS ----------------
-// Printer:  { type:'star-printer', id, cmd:'status' | 'send', bytes? }
-//        -> { type:'star-printer-reply', id, ok, connected, inUse, printer?, error? }
-// Terminal: { type:'pax-term', id, cmd:'ping' | 'fetch', url, tmo, mode, tas }
-//        -> { type:'pax-term-reply', id, ok, status, bytes, ms, timeout, err, info }
-// POS:      { type:'gv-pos', cmd:'hello' }  the POS loaded (clears "The POS could not open here")
-//           { type:'gv-pos', cmd:'reload' } reload the POS frame (System Update)
 let printQueue = Promise.resolve();   // one print job at a time, in order
 window.addEventListener('message', ev => {
   const m = ev.data;
