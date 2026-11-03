@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Shell | rev 1 | last update 2026-11-03 10:28 MT (raise the rev and change the date and time with every change; also SHELL_REV below) -->
 <html>
 <head>
   <meta charset="utf-8">
@@ -37,6 +38,7 @@
   <button id="corner" title="Printer and POS address">&#9881;</button>
   <div id="menu">
     <div id="menuPrinter">Printer: checking...</div>
+    <div id="menuRev" style="font-size:11px;color:#64748b">Shell rev ?</div>
     <button id="btnConnect">Connect printer</button>
     <button id="btnUrl">POS address</button>
     <button id="btnDirect" style="display:none">Open POS without printer</button>
@@ -46,6 +48,8 @@
 // ---------------- Settings ----------------
 const SHOW_OPEN_WITHOUT_PRINTER = false;   // "Open POS without printer" (Sh1): true only once test P1 passes (the direct copy works)
 const HELLO_WAIT_MS = 20000;               // no greeting from the POS in this time = "The POS could not open here"
+const SHELL_REV = 1;                      // this file's revision (same as the comment at the top); the print page shows its own, read from the live page
+const PRINT_PAGE = 'https:' + '/' + '/li-shell.github.io/print/';   // only read for its revision comment (the POS opens it with the receipt)
 const SUPPORT_NAME = 'Manager';            // who the clerk tells (the shell cannot read POS_Keys)
 
 const $ = id => document.getElementById(id);
@@ -232,7 +236,19 @@ async function relayTerminal(m, ev) {
 }
 
 // ---------------- Corner menu ----------------
-$('corner').onclick = () => $('menu').classList.toggle('show');
+// The revisions, concisely: "Shell rev 1 · Print rev 1". The print revision is read from the live print page (its first comment line); "?" when it cannot be read.
+let printRev = null;
+function showRevs() { $('menuRev').textContent = 'Shell rev ' + SHELL_REV + ' \u00b7 Print rev ' + (printRev || '?'); }
+async function loadPrintRev() {
+  try {
+    const r = await fetch(PRINT_PAGE, { cache: 'no-store' });
+    const m = /<!--\s*Print\s*\|\s*rev\s+(\d+)/i.exec(await r.text());
+    printRev = m ? m[1] : null;
+  } catch (e) { printRev = null; }
+  showRevs();
+}
+showRevs();
+$('corner').onclick = () => { $('menu').classList.toggle('show'); if ($('menu').classList.contains('show')) loadPrintRev(); };
 $('btnConnect').onclick = () => { $('menu').classList.remove('show'); connectPrinter(); };
 $('btnUrl').onclick = () => { $('menu').classList.remove('show'); askPosUrl(); };
 $('btnDirect').onclick = () => { $('menu').classList.remove('show'); openDirect(); };
