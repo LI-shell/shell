@@ -44,7 +44,6 @@
 
 <script>
 // ---------------- Settings ----------------
-const ALLOW_DEV_ADDRESS = true;           // true also accepts a /dev address (testing only; needs an editor's sign-in)
 const SHOW_OPEN_WITHOUT_PRINTER = false;   // "Open POS without printer" (Sh1): true only once test P1 passes (the direct copy works)
 const HELLO_WAIT_MS = 20000;               // no greeting from the POS in this time = "The POS could not open here"
 const SUPPORT_NAME = 'Manager';            // who the clerk tells (the shell cannot read POS_Keys)
@@ -88,8 +87,7 @@ function renderStrip() {
 
 // ---------------- POS address (remembered on this device) ----------------
 function validPosUrl(url) {
-  return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url) ||
-    (ALLOW_DEV_ADDRESS && /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/dev$/.test(url));
+  return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url);   // /exec only (owner item 46: no /dev)
 }
 let helloTimer = null;
 function loadPos() {
